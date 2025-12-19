@@ -53,14 +53,24 @@ namespace Utils {
             return dist(generator);
         }
     };
-    
+
     static std::vector<std::string> split(const std::string& s, char delimiter) {
         std::vector<std::string> tokens;
         std::string token;
-        std::istringstream tokenStream(s);
-        while (std::getline(tokenStream, token, delimiter)) {
-            tokens.push_back(token);
+        bool in_quotes = false;
+    
+        for (char c : s) {
+            if (c == '"') {
+                in_quotes = !in_quotes;
+            } else if (c == delimiter && !in_quotes) {
+                tokens.push_back(token);
+                token.clear();
+            } else {
+                token += c;
+            }
         }
+        tokens.push_back(token);
+    
         return tokens;
     }
     

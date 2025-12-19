@@ -10,7 +10,7 @@ int main() {
     try {
         // Option 1: Load data from CSV
         DataLoader loader;
-        if (loader.loadCSV("datasets/titanic.csv", true, ',', true)) {
+        if (loader.loadCSV("../datasets/titanic.csv", true, ',', true)) {
             loader.printInfo();
             
             // Split data

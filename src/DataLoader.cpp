@@ -18,15 +18,31 @@ bool DataLoader::loadCSV(const std::string& filename, bool has_labels,
     feature_names.clear();
     
     // Read file
-    std::vector<std::vector<double>> rows;
+    std::vector<std::vector<std::string>> rows;
     std::string line;
     int line_num = 0;
     
+    // Read all lines
     while (std::getline(file, line)) {
         line_num++;
         if (line.empty()) continue;
         
-        auto tokens = Utils::split(line, delimiter);
+        // Parse CSV line with quoted fields
+        std::vector<std::string> tokens;
+        std::string token;
+        bool in_quotes = false;
+        
+        for (char c : line) {
+            if (c == '"') {
+                in_quotes = !in_quotes;
+            } else if (c == delimiter && !in_quotes) {
+                tokens.push_back(token);
+                token.clear();
+            } else {
+                token += c;
+            }
+        }
+        tokens.push_back(token);  // Add last token
         
         if (line_num == 1 && header) {
             feature_names = tokens;
@@ -36,23 +52,14 @@ bool DataLoader::loadCSV(const std::string& filename, bool has_labels,
             continue;
         }
         
-        std::vector<double> row;
-        try {
-            for (size_t i = 0; i < tokens.size(); i++) {
-                double value;
-                if (tokens[i].empty() || tokens[i] == "NA" || tokens[i] == "null") {
-                    value = std::numeric_limits<double>::quiet_NaN();
-                } else {
-                    value = std::stod(tokens[i]);
-                }
-                row.push_back(value);
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not parse line " << line_num << ": " << e.what() << std::endl;
+        // Skip rows that don't have enough columns
+        if (tokens.size() < 2) {
+            std::cerr << "Warning: Skipping line " << line_num 
+                      << " - insufficient columns" << std::endl;
             continue;
         }
         
-        rows.push_back(row);
+        rows.push_back(tokens);
     }
     
     file.close();
@@ -62,7 +69,7 @@ bool DataLoader::loadCSV(const std::string& filename, bool has_labels,
         return false;
     }
     
-    // Convert to Eigen matrices
+    // Determine dimensions
     int n_samples = rows.size();
     int n_features = rows[0].size() - (has_labels ? 1 : 0);
     
@@ -71,41 +78,126 @@ bool DataLoader::loadCSV(const std::string& filename, bool has_labels,
         labels.resize(n_samples);
     }
     
-    // Handle missing values with mean imputation
-    std::vector<double> col_sums(n_features, 0.0);
-    std::vector<int> col_counts(n_features, 0);
+    // Track which features are numeric
+    std::vector<bool> is_numeric_feature(n_features, true);
+    std::vector<std::vector<double>> numeric_data(n_features);
     
-    // First pass: compute column means for non-NaN values
-    for (int i = 0; i < n_samples; i++) {
-        for (int j = 0; j < n_features; j++) {
-            if (!std::isnan(rows[i][j])) {
-                col_sums[j] += rows[i][j];
-                col_counts[j]++;
-            }
-        }
-    }
-    
-    std::vector<double> col_means(n_features);
+    // First pass: try to convert each column to numeric
     for (int j = 0; j < n_features; j++) {
-        col_means[j] = col_counts[j] > 0 ? col_sums[j] / col_counts[j] : 0.0;
-    }
-    
-    // Second pass: fill data matrix and impute missing values
-    for (int i = 0; i < n_samples; i++) {
-        for (int j = 0; j < n_features; j++) {
-            if (std::isnan(rows[i][j])) {
-                data(i, j) = col_means[j];
-            } else {
-                data(i, j) = rows[i][j];
+        bool all_numeric = true;
+        for (int i = 0; i < n_samples; i++) {
+            std::string val = rows[i][j];
+            
+            // Remove quotes if present
+            if (!val.empty() && val.front() == '"' && val.back() == '"') {
+                val = val.substr(1, val.size() - 2);
+            }
+            
+            // Skip empty values
+            if (val.empty() || val == "NA" || val == "null" || val == "nan") {
+                numeric_data[j].push_back(std::numeric_limits<double>::quiet_NaN());
+                continue;
+            }
+            
+            // Try to convert to double
+            try {
+                double num_val = std::stod(val);
+                numeric_data[j].push_back(num_val);
+            } catch (...) {
+                // Conversion failed - mark as non-numeric
+                all_numeric = false;
+                break;
             }
         }
-        if (has_labels) {
-            labels(i) = rows[i][n_features]; // Last column is label
+        
+        is_numeric_feature[j] = all_numeric;
+    }
+    
+    // Count how many numeric features we have
+    int numeric_feature_count = 0;
+    for (bool is_numeric : is_numeric_feature) {
+        if (is_numeric) numeric_feature_count++;
+    }
+    
+    std::cout << "Found " << numeric_feature_count << " numeric features out of " 
+              << n_features << " total features\n";
+    
+    // Resize data for only numeric features
+    data.resize(n_samples, numeric_feature_count);
+    
+    // Second pass: fill numeric features
+    int current_feature = 0;
+    for (int j = 0; j < n_features; j++) {
+        if (is_numeric_feature[j]) {
+            // Handle missing values with mean imputation
+            double sum = 0.0;
+            int count = 0;
+            
+            // Compute mean of non-NaN values
+            for (double val : numeric_data[j]) {
+                if (!std::isnan(val)) {
+                    sum += val;
+                    count++;
+                }
+            }
+            double mean = count > 0 ? sum / count : 0.0;
+            
+            // Fill column with imputed values
+            for (int i = 0; i < n_samples; i++) {
+                double val = numeric_data[j][i];
+                if (std::isnan(val)) {
+                    data(i, current_feature) = mean;
+                } else {
+                    data(i, current_feature) = val;
+                }
+            }
+            current_feature++;
         }
     }
     
-    std::cout << "Loaded " << n_samples << " samples with " << n_features 
-              << " features from " << filename << std::endl;
+    // Load labels if present
+    if (has_labels) {
+        int label_col = n_features; // Labels are in the last column
+        
+        for (int i = 0; i < n_samples; i++) {
+            std::string label_str = rows[i][label_col];
+            
+            // Simple label encoding: assume "0", "1" or similar
+            try {
+                labels(i) = std::stod(label_str);
+            } catch (...) {
+                // Try to parse common label formats
+                if (label_str == "0" || label_str == "false" || label_str == "False" || 
+                    label_str == "FALSE" || label_str == "no" || label_str == "No") {
+                    labels(i) = 0.0;
+                } else if (label_str == "1" || label_str == "true" || label_str == "True" ||
+                          label_str == "TRUE" || label_str == "yes" || label_str == "Yes") {
+                    labels(i) = 1.0;
+                } else {
+                    // Default to 0 if can't parse
+                    labels(i) = 0.0;
+                }
+            }
+        }
+    }
+    
+    std::cout << "Successfully loaded " << n_samples << " samples with " 
+              << numeric_feature_count << " numeric features from " << filename << std::endl;
+    
+    // Print summary of first few samples
+    if (n_samples > 0) {
+        std::cout << "\nFirst 3 samples:\n";
+        for (int i = 0; i < std::min(3, n_samples); i++) {
+            std::cout << "Sample " << i << ": ";
+            for (int j = 0; j < std::min(5, numeric_feature_count); j++) {
+                std::cout << data(i, j) << " ";
+            }
+            if (has_labels) {
+                std::cout << " -> Label: " << labels(i);
+            }
+            std::cout << std::endl;
+        }
+    }
     
     return true;
 }
