@@ -159,6 +159,9 @@ bool DataLoader::loadCSV(const std::string& filename, bool has_labels,
     if (has_labels) {
         int label_col = n_features; // Labels are in the last column
         
+
+        label_col = 1;
+
         for (int i = 0; i < n_samples; i++) {
             std::string label_str = rows[i][label_col];
             
