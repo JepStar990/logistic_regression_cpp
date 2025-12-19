@@ -1,4 +1,3 @@
-```markdown
 # Logistic Regression from Scratch in C++
 
 A complete implementation of logistic regression for binary classification written entirely in C++ from scratch.
