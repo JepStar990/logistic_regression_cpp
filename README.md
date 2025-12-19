@@ -211,6 +211,3 @@ Acknowledgments
 · Eigen library for linear algebra operations
 · Inspired by scikit-learn's logistic regression implementation
 · Kaggle community for datasets and inspiration
-
-```
-
